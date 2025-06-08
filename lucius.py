@@ -20,7 +20,6 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ---------------------- CONFIGURATION ----------------------
-# Корректно: ключ переменной окружения, а не сам токен!
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "7839713101:AAFcPH9XPx5aZOI52IBbLXKzNwK4QB4F47E")
 TESSERACT_CMD: str = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -33,7 +32,7 @@ ALLOWED_USERS: List[int] = [
     1181905320, 5847349753, 6591579113, 447217410,
     6798620038, 803525517, 6477970486, 919223506,
     834962174, 1649277905, 1812295057, 1955102736, 692242823,
-    7388938513
+    7388938513, 717164010
 ]
 SPECIAL_USER_IDS: Tuple[int, int] = (1181905320, 1955102736)
 ADMIN_USER_ID = 1181905320  # Соболев Владислав
@@ -42,7 +41,9 @@ BUTTON_VYGRUZKA: str = "📤 Выгрузка"
 BUTTON_RETURN: str = "🔙 Вернуться"
 BUTTON_SAVE_NOTES: str = "💾 Сохранить заметку"
 BUTTON_DELETE_NOTE: str = "❌ Удалить последнюю заметку"
-BUTTON_TABLE: str = "📊 Таблица"  # Новая кнопка
+BUTTON_TABLE: str = "📊 Таблица"
+BUTTON_MY_STATS: str = "👤 Моя статистика"
+BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
 
 NOTES_DIR: Path = Path("notes")
 TEMP_DIR: Path = Path("temp")
@@ -63,11 +64,18 @@ def is_valid_number(text: str) -> Optional[str]:
     return match.group(0) if match else None
 
 def get_user_reply_markup(user_id: int) -> Optional[ReplyKeyboardMarkup]:
-    if user_id in SPECIAL_USER_IDS:
+    if user_id in [
+        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
+        6477970486, 919223506, 834962174, 1649277905, 1812295057,
+        717164010, 692242823, 7388938513
+    ]:
         keyboard = [
-            [BUTTON_VYGRUZKA],
-            [BUTTON_TABLE]
+            [BUTTON_MY_STATS],
+            [BUTTON_CONTACT_ADMIN]
         ]
+        if user_id in SPECIAL_USER_IDS:
+            keyboard.insert(0, [BUTTON_VYGRUZKA])
+            keyboard.insert(1, [BUTTON_TABLE])
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     return None
 
@@ -197,13 +205,13 @@ async def append_to_google_sheets_async(spreadsheet: gspread.Spreadsheet, sheet_
                         }
                     }]
                     spreadsheet.batch_update({"requests": requests})
-                    logging.info(f"Duplicate number found and highlighted: {data[0]} at row {duplicate_row}")
+                    logging.info(f"Duplicate scooter found and highlighted: {data[0]} at row {duplicate_row}")
 
                 sheet.update_cell(next_row, number_column, f"'{data[0]}")
                 sheet.update_cell(next_row, datetime_column, current_datetime)
                 logging.info(f"Data appended to Google Sheets at row {next_row}: {data[0]}, {current_datetime}")
             await loop.run_in_executor(None, _func)
-            await asyncio.sleep(1)  # лимитируем массовые операции
+            await asyncio.sleep(1)
             break
         except Exception as e:
             logging.error(f"Google Sheets update error (attempt {attempt+1}): {e}")
@@ -227,6 +235,7 @@ async def analyze_google_sheet_data_optimized_async(spreadsheet: gspread.Spreads
         overall_total, overall_duplicates = 0, 0
         current_date: str = datetime.now().strftime("%d.%m")
 
+        active_users = []
         for user_name, (col_number, date_col) in user_column_map.items():
             num_idx, date_idx = col_number - 1, date_col - 1
             filtered_numbers, filtered_dates = [], []
@@ -243,25 +252,91 @@ async def analyze_google_sheet_data_optimized_async(spreadsheet: gspread.Spreads
                         except Exception:
                             continue
             total_numbers = len(filtered_numbers)
-            overall_total += total_numbers
             duplicate_count = sum(
                 count - 1 for count in {n: filtered_numbers.count(n) for n in filtered_numbers}.values() if count > 1)
-            overall_duplicates += duplicate_count
             last_date = filtered_dates[-1] if filtered_dates else "нет данных"
-            summary_lines.append(
-                f"{user_name}\nДата: {last_date}\nВсего: {total_numbers}\nДубликаты: {duplicate_count}"
-            )
 
-        summary_lines.append(f"\nВсего номеров: {overall_total}")
+            if total_numbers > 0:
+                active_users.append(user_name)
+                summary_lines.append(
+                    f"\U0001F7E2 {user_name}\nДата: {last_date}\nВсего самокатов: {total_numbers}\nДубликаты: {duplicate_count}"
+                )
+
+            overall_total += total_numbers
+            overall_duplicates += duplicate_count
+
+        summary_lines.append(f"\nВсего самокатов: {overall_total}")
         summary_lines.append(f"Всего дубликатов: {overall_duplicates}")
+        summary_lines.append(f"Исполнителей: {len(active_users)}")
         return "\n\n".join(summary_lines)
+    return await loop.run_in_executor(None, _func)
+
+async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> str:
+    loop = asyncio.get_running_loop()
+    def _func():
+        sheet = spreadsheet.worksheet("QR Codes")
+        all_data = sheet.get_all_values()
+        if not all_data or user_id not in user_names:
+            return "У вас пока нет добавленных самокатов. Попробуйте отправить номер или QR-код!"
+
+        user_name = user_names[user_id]
+        if user_name not in user_column_map:
+            return "У вас пока нет добавленных самокатов. Попробуйте отправить номер или QR-код!"
+
+        col_number, date_col = user_column_map[user_name]
+        num_idx, date_idx = col_number - 1, date_col - 1
+
+        today = datetime.now().strftime("%d.%m")
+        numbers_today = []
+        all_numbers = []
+        all_dates = []
+
+        for row in all_data[1:]:
+            if len(row) > max(num_idx, date_idx):
+                number = row[num_idx]
+                date_str = row[date_idx]
+                if number.strip():
+                    all_numbers.append(number)
+                    all_dates.append(date_str)
+                    try:
+                        parsed_date = datetime.strptime(date_str.strip(), "%d.%m. %H:%M")
+                        if parsed_date.strftime("%d.%m") == today:
+                            numbers_today.append(number)
+                    except Exception:
+                        continue
+
+        if not all_numbers:
+            return "У вас пока нет добавленных самокатов. Попробуйте отправить номер или QR-код!"
+
+        today_duplicates = sum(
+            count - 1 for count in {n: numbers_today.count(n) for n in numbers_today}.values() if count > 1)
+
+        last_date = None
+        if all_dates and any(all_dates):
+            last_dates = [d for d in all_dates if d.strip()]
+            last_date = last_dates[-1] if last_dates else "нет данных"
+        else:
+            last_date = "нет данных"
+
+        # Получаем только имя (например, "Владислав" из "Соболев Владислав")
+        first_name = user_name.split()[1] if len(user_name.split()) > 1 else user_name
+
+        text = (
+            f"👤 Ваша статистика\n\n"
+            f"{first_name}\n\n"
+            f"За сегодня вы добавили: {len(numbers_today)} самокатов\n"
+            f"Дубликатов: {today_duplicates}\n"
+            f"Дата последнего добавления: {last_date}\n\n"
+            f"Всего добавлено самокатов: {len(all_numbers)}"
+        )
+        return text
     return await loop.run_in_executor(None, _func)
 
 async def background_refresh() -> None:
     while True:
         try:
             await get_spreadsheet_async()
-            await asyncio.sleep(43200)  # 12 часов
+            await asyncio.sleep(43200)
         except Exception as e:
             logging.error(f"Error during background refresh: {e}")
             await asyncio.sleep(43200)
@@ -335,11 +410,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа.")
         return
     user_id = update.message.from_user.id
-    reply_markup = get_user_reply_markup(user_id) if user_id in SPECIAL_USER_IDS else ReplyKeyboardRemove()
+    reply_markup = get_user_reply_markup(user_id)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text="Привет! Готов к работе.",
-        reply_markup=reply_markup
+        reply_markup=reply_markup if reply_markup else ReplyKeyboardRemove()
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -348,16 +423,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа.")
         return
     user_id = update.message.from_user.id
-    if user_id in SPECIAL_USER_IDS:
+    reply_markup = get_user_reply_markup(user_id)
+    if user_id in [
+        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
+        6477970486, 919223506, 834962174, 1649277905, 1812295057,
+        717164010, 692242823, 7388938513
+    ]:
         text = (
             "Доступные команды:\n"
             "/start — запуск бота\n"
             "/help — помощь\n"
             "/save_notes — сохранить заметку\n"
             "/delete_last_note — удалить последнюю заметку\n"
-            "Кнопка «Выгрузка» и «Таблица» доступны спецпользователям."
+            "Доступны кнопки: Моя статистика, Написать админу.\n"
+            "Кнопки «Выгрузка» и «Таблица» доступны спецпользователям."
         )
-        reply_markup = get_user_reply_markup(user_id)
     else:
         text = (
             "Доступные команды:\n"
@@ -388,7 +468,6 @@ async def handle_photo_with_text(update: Update, context: ContextTypes.DEFAULT_T
     with file_path.open('wb') as f:
         f.write(file_bytes)
     await process_qr_photo(update, context, str(file_path), user_id)
-    # удаление временного файла после обработки
     try:
         file_path.unlink()
     except Exception as e:
@@ -414,9 +493,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if number:
         spreadsheet = await get_spreadsheet_async()
         await append_to_google_sheets_async(spreadsheet, "QR Codes", update.message.from_user.id, [number], context)
-        await context.bot.send_message(chat_id=update.message.chat_id, text=f"Номер {number} сохранён.")
+        await context.bot.send_message(chat_id=update.message.chat_id, text=f"Самокат {number} сохранён.")
     else:
-        await context.bot.send_message(chat_id=update.message.chat_id, text="Номер не найден.")
+        await context.bot.send_message(chat_id=update.message.chat_id, text="Самокат не найден.")
 
 async def handle_vygruzka(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
@@ -460,9 +539,38 @@ async def handle_vozvrat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     reply_markup = get_user_reply_markup(user_id)
     await context.bot.send_message(chat_id=update.message.chat_id, text="Меню спецпользователя.", reply_markup=reply_markup)
 
+async def handle_my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+    if user_id not in [
+        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
+        6477970486, 919223506, 834962174, 1649277905, 1812295057,
+        717164010, 692242823, 7388938513
+    ]:
+        log_unauthorized_access(user_id, "handle_my_stats")
+        await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к этой функции.")
+        return
+    await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
+    spreadsheet = await get_spreadsheet_async()
+    stats = await get_personal_stats(spreadsheet, user_id)
+    await context.bot.send_message(chat_id=update.message.chat_id, text=stats)
+
+async def handle_contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+    if user_id not in [
+        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
+        6477970486, 919223506, 834962174, 1649277905, 1812295057,
+        717164010, 692242823, 7388938513
+    ]:
+        log_unauthorized_access(user_id, "handle_contact_admin")
+        await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к этой функции.")
+        return
+    await context.bot.send_message(
+        chat_id=update.message.chat_id,
+        text="Если возникли вопросы или нужна помощь, напишите админу:\n@Cyberdyne_Industries"
+    )
+
 # ----------------- Unit-тесты для функций ------------------
 async def test_append_and_duplicate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тест для Соболева Владислава: пишет в ячейки A/B и проверяет дублирование."""
     user_id = update.message.from_user.id
     if user_id != ADMIN_USER_ID:
         await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к тестам.")
@@ -475,7 +583,6 @@ async def test_append_and_duplicate(update: Update, context: ContextTypes.DEFAUL
     await context.bot.send_message(chat_id=update.message.chat_id, text="Тест завершён. Проверьте дублирование (см. A/B).")
 
 async def test_qr_decode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тест обработки QR (только для Владислава)."""
     user_id = update.message.from_user.id
     if user_id != ADMIN_USER_ID:
         await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к тестам.")
@@ -496,8 +603,10 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_DELETE_NOTE), delete_last_note))
     application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_with_text))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_VYGRUZKA), handle_vygruzka))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_TABLE), handle_table))  # Новый handler!
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_TABLE), handle_table))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_RETURN), handle_vozvrat))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_MY_STATS), handle_my_stats))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_CONTACT_ADMIN), handle_contact_admin))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     refresh_task = asyncio.create_task(background_refresh())
