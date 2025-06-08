@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Установить libGL и zbar для работы cv2 и pyzbar
+# Установить libGL, zbar и glib для работы cv2 и pyzbar
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
