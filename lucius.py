@@ -20,13 +20,25 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ---------------------- CONFIGURATION ----------------------
-BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "7839713101:AAFcPH9XPx5aZOI52IBbLXKzNwK4QB4F47E")
+BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "тут_твой_токен")
 TESSERACT_CMD: str = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-GOOGLE_CREDENTIALS_PATH: str = r"C:\Users\pankr\PycharmProjects\lucius\credentials\scooteracomulator-1d3a66b4a345.json"
+# ------ Вот этот блок должен быть только один раз ------
+creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if creds_json:
+    GOOGLE_CREDENTIALS_PATH = "/app/credentials.json"
+    with open(GOOGLE_CREDENTIALS_PATH, "w", encoding="utf-8") as f:
+        f.write(creds_json)
+else:
+    # Фолбэк для локального запуска, если переменной окружения нет
+    GOOGLE_CREDENTIALS_PATH = r"C:\Users\pankr\PycharmProjects\lucius\credentials\scooteracomulator-1d3a66b4a345.json"
+
 os.environ["GOOGLE_CREDENTIALS_PATH"] = GOOGLE_CREDENTIALS_PATH
+# --------------------------------------------------------
 
 GOOGLE_SHEET_URL: str = "https://docs.google.com/spreadsheets/d/1-xD9Yst0XiEmoSMzz1V6IGxzHTtOAJdkxykQLlwhk9Q/edit?usp=sharing"
+
+# ... дальше по коду ...
 
 ALLOWED_USERS: List[int] = [
     1181905320, 5847349753, 6591579113, 447217410,
