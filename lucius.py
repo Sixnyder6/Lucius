@@ -23,7 +23,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "7839713101:AAFcPH9XPx5aZOI52IBbLXKzNwK4QB4F47E")
 TESSERACT_CMD: str = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-GOOGLE_CREDENTIALS_PATH: str = r"C:\Users\pankr\PycharmProjects\lucius\credentials\scooteracomulator-92659037b614.json"
+GOOGLE_CREDENTIALS_PATH: str = r"C:\Users\pankr\PycharmProjects\lucius\credentials\scooteracomulator-1d3a66b4a345.json"
 os.environ["GOOGLE_CREDENTIALS_PATH"] = GOOGLE_CREDENTIALS_PATH
 
 GOOGLE_SHEET_URL: str = "https://docs.google.com/spreadsheets/d/1-xD9Yst0XiEmoSMzz1V6IGxzHTtOAJdkxykQLlwhk9Q/edit?usp=sharing"
@@ -64,20 +64,14 @@ def is_valid_number(text: str) -> Optional[str]:
     return match.group(0) if match else None
 
 def get_user_reply_markup(user_id: int) -> Optional[ReplyKeyboardMarkup]:
-    if user_id in [
-        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
-        6477970486, 919223506, 834962174, 1649277905, 1812295057,
-        717164010, 692242823, 7388938513
-    ]:
-        keyboard = [
-            [BUTTON_MY_STATS],
-            [BUTTON_CONTACT_ADMIN]
-        ]
-        if user_id in SPECIAL_USER_IDS:
-            keyboard.insert(0, [BUTTON_VYGRUZKA])
-            keyboard.insert(1, [BUTTON_TABLE])
-        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    return None
+    keyboard = [
+        [BUTTON_MY_STATS],
+        [BUTTON_CONTACT_ADMIN]
+    ]
+    if user_id in SPECIAL_USER_IDS:
+        keyboard.insert(0, [BUTTON_VYGRUZKA])
+        keyboard.insert(1, [BUTTON_TABLE])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def is_user_allowed(user_id: int) -> bool:
     return user_id in ALLOWED_USERS
@@ -318,7 +312,6 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
         else:
             last_date = "нет данных"
 
-        # Получаем только имя (например, "Владислав" из "Соболев Владислав")
         first_name = user_name.split()[1] if len(user_name.split()) > 1 else user_name
 
         text = (
@@ -376,7 +369,7 @@ def decode_qr_code(image_path: str) -> Optional[str]:
         return number
     return None
 
-# ------------- REPLIES BELOW MADE SHORT AND IN RUSSIAN -------------
+# ------------- HANDLERS -------------
 
 async def save_notes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_user_allowed(update.message.from_user.id):
@@ -424,27 +417,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     user_id = update.message.from_user.id
     reply_markup = get_user_reply_markup(user_id)
-    if user_id in [
-        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
-        6477970486, 919223506, 834962174, 1649277905, 1812295057,
-        717164010, 692242823, 7388938513
-    ]:
-        text = (
-            "Доступные команды:\n"
-            "/start — запуск бота\n"
-            "/help — помощь\n"
-            "/save_notes — сохранить заметку\n"
-            "/delete_last_note — удалить последнюю заметку\n"
-            "Доступны кнопки: Моя статистика, Написать админу.\n"
-            "Кнопки «Выгрузка» и «Таблица» доступны спецпользователям."
-        )
-    else:
-        text = (
-            "Доступные команды:\n"
-            "/start — запуск бота\n"
-            "/help — помощь"
-        )
-        reply_markup = ReplyKeyboardRemove()
+    text = (
+        "Доступные команды:\n"
+        "/start — запуск бота\n"
+        "/help — помощь\n"
+        "/save_notes — сохранить заметку\n"
+        "/delete_last_note — удалить последнюю заметку\n"
+        "Доступны кнопки: Моя статистика, Написать админу.\n"
+        "Кнопки «Выгрузка» и «Таблица» доступны спецпользователям."
+    )
     await context.bot.send_message(chat_id=update.message.chat_id, text=text, reply_markup=reply_markup)
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -541,11 +522,7 @@ async def handle_vozvrat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def handle_my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
-    if user_id not in [
-        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
-        6477970486, 919223506, 834962174, 1649277905, 1812295057,
-        717164010, 692242823, 7388938513
-    ]:
+    if not is_user_allowed(user_id):
         log_unauthorized_access(user_id, "handle_my_stats")
         await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к этой функции.")
         return
@@ -556,11 +533,7 @@ async def handle_my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def handle_contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
-    if user_id not in [
-        1181905320, 5847349753, 6591579113, 447217410, 6798620038, 803525517,
-        6477970486, 919223506, 834962174, 1649277905, 1812295057,
-        717164010, 692242823, 7388938513
-    ]:
+    if not is_user_allowed(user_id):
         log_unauthorized_access(user_id, "handle_contact_admin")
         await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к этой функции.")
         return
@@ -599,14 +572,14 @@ async def main() -> None:
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("test_append", test_append_and_duplicate))
     application.add_handler(CommandHandler("test_qr", test_qr_decode))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_SAVE_NOTES), save_notes_handler))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_DELETE_NOTE), delete_last_note))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_SAVE_NOTES}$"), save_notes_handler))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_DELETE_NOTE}$"), delete_last_note))
     application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_with_text))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_VYGRUZKA), handle_vygruzka))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_TABLE), handle_table))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_RETURN), handle_vozvrat))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_MY_STATS), handle_my_stats))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(BUTTON_CONTACT_ADMIN), handle_contact_admin))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_VYGRUZKA}$"), handle_vygruzka))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_TABLE}$"), handle_table))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_RETURN}$"), handle_vozvrat))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_MY_STATS}$"), handle_my_stats))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_CONTACT_ADMIN}$"), handle_contact_admin))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     refresh_task = asyncio.create_task(background_refresh())
