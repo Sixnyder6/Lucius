@@ -1,15 +1,20 @@
-# Python
+# Python cache
 __pycache__/
 *.pyc
 
-# Virtual env
+# Virtual environments
 .venv/
 env/
 venv/
 
-# JetBrains IDE
+# JetBrains (PyCharm) project files
 .idea/
 
-# Credentials, secrets
+# Credentials & temp files
 credentials/
 temp/
+
+# Other common secrets
+.env
+*.env
+*.secret
