@@ -10,12 +10,11 @@ import numpy as np
 import cv2
 import pytesseract
 from pyzbar.pyzbar import decode
-from PIL import Image
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+import easyocr
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import nest_asyncio
-from openpyxl import Workbook, load_workbook
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -23,22 +22,16 @@ from oauth2client.service_account import ServiceAccountCredentials
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "тут_твой_токен")
 TESSERACT_CMD: str = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# ------ Вот этот блок должен быть только один раз ------
 creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if creds_json:
     GOOGLE_CREDENTIALS_PATH = "/app/credentials.json"
     with open(GOOGLE_CREDENTIALS_PATH, "w", encoding="utf-8") as f:
         f.write(creds_json)
 else:
-    # Фолбэк для локального запуска, если переменной окружения нет
     GOOGLE_CREDENTIALS_PATH = r"C:\Users\pankr\PycharmProjects\lucius\credentials\scooteracomulator-1d3a66b4a345.json"
-
 os.environ["GOOGLE_CREDENTIALS_PATH"] = GOOGLE_CREDENTIALS_PATH
-# --------------------------------------------------------
 
 GOOGLE_SHEET_URL: str = "https://docs.google.com/spreadsheets/d/1-xD9Yst0XiEmoSMzz1V6IGxzHTtOAJdkxykQLlwhk9Q/edit?usp=sharing"
-
-# ... дальше по коду ...
 
 ALLOWED_USERS: List[int] = [
     1181905320, 5847349753, 6591579113, 447217410,
@@ -56,9 +49,22 @@ BUTTON_DELETE_NOTE: str = "❌ Удалить последнюю заметку"
 BUTTON_TABLE: str = "📊 Таблица"
 BUTTON_MY_STATS: str = "👤 Моя статистика"
 BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
+BUTTON_INFO: str = "ℹ️ Информация"
 
 NOTES_DIR: Path = Path("notes")
 TEMP_DIR: Path = Path("temp")
+
+PHOTO_PATHS = [
+    (r"C:\Users\pankr\PycharmProjects\lucius\Photos\1 QR.jpg",
+     "🟢 <b>QR-код</b>\n\n"
+     "Пришли пример такого фото, чтобы добавить <b>уникальный номер самоката</b> — он автоматически попадёт в твою индивидуальную статистику!"),
+    (r"C:\Users\pankr\PycharmProjects\lucius\Photos\2 Nomer Zad.jpg",
+     "🟡 <b>Задний номер самоката</b>\n\n"
+     "Пришли пример такого фото, чтобы добавить <b>уникальный номер самоката</b>, если не доступен QR-код или лень его сканировать."),
+    (r"C:\Users\pankr\PycharmProjects\lucius\Photos\Nomer Text.jpg",
+     "🔴 <b>Текстовый номер</b>\n\n"
+     "Пришли пример такого фото, чтобы добавить <b>уникальный номер самоката</b>, если не доступны оба варианта выше (QR-код и задний номер).")
+]
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
@@ -78,7 +84,8 @@ def is_valid_number(text: str) -> Optional[str]:
 def get_user_reply_markup(user_id: int) -> Optional[ReplyKeyboardMarkup]:
     keyboard = [
         [BUTTON_MY_STATS],
-        [BUTTON_CONTACT_ADMIN]
+        [BUTTON_CONTACT_ADMIN],
+        [BUTTON_INFO]
     ]
     if user_id in SPECIAL_USER_IDS:
         keyboard.insert(0, [BUTTON_VYGRUZKA])
@@ -346,40 +353,41 @@ async def background_refresh() -> None:
             logging.error(f"Error during background refresh: {e}")
             await asyncio.sleep(43200)
 
-def rotate_image(image: np.ndarray, angle: float) -> np.ndarray:
-    (h, w) = image.shape[:2]
-    center = (w / 2, h / 2)
-    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-    rotated = cv2.warpAffine(image, M, (w, h))
-    return rotated
+# ------ EasyOCR integration ------
+easyocr_reader = easyocr.Reader(['ru', 'en'])
 
-def decode_qr_code(image_path: str) -> Optional[str]:
-    logging.info("Called decode_qr_code")
-    image = cv2.imread(image_path)
-    if image is None:
-        logging.error("Failed to load image")
-        return None
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    for angle in [0, 90, 180, 270]:
-        rotated_image = rotate_image(gray, angle)
-        decoded_objects = decode(rotated_image)
-        for obj in decoded_objects:
-            qr_text = obj.data.decode("utf-8")
-            match = re.search(r'\d{8}', qr_text)
-            if match:
-                number = match.group(0)
-                logging.info(f"Extracted number: {number} at angle {angle}")
-                return number
-
-    logging.error("No QR code found at any angle, trying OCR")
-    ocr_result = pytesseract.image_to_string(gray)
-    match = re.search(r'\d{8}', ocr_result)
-    if match:
-        number = match.group(0)
-        logging.info(f"Extracted number via OCR: {number}")
-        return number
+def extract_number_easyocr(image_path: str) -> Optional[str]:
+    result = easyocr_reader.readtext(image_path, detail=0)
+    import re
+    groups = []
+    for line in result:
+        m = re.search(r'(\d{4})', line)
+        if m:
+            groups.append(m.group(1))
+    if len(groups) >= 2:
+        return groups[0] + groups[1]
+    m8 = re.search(r'(\d{8})', ''.join(result))
+    if m8:
+        return m8.group(1)
     return None
+
+def extract_qr_and_number(image_path: str) -> tuple[Optional[str], Optional[str]]:
+    image = cv2.imread(image_path)
+    qr_data = None
+    decoded = decode(image)
+    if decoded:
+        qr_data = decoded[0].data.decode("utf-8")
+        qr_data = re.sub(r"\D", "", qr_data)  # только цифры
+
+    number = extract_number_easyocr(image_path)
+    if not number:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        ocr_result = pytesseract.image_to_string(gray, config="--psm 6 digits")
+        numbers = re.findall(r"\d{4}\s*\d{4}", ocr_result.replace('\n', ''))
+        if numbers:
+            number = numbers[0].replace(" ", "")
+
+    return qr_data, number
 
 # ------------- HANDLERS -------------
 
@@ -435,7 +443,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/help — помощь\n"
         "/save_notes — сохранить заметку\n"
         "/delete_last_note — удалить последнюю заметку\n"
-        "Доступны кнопки: Моя статистика, Написать админу.\n"
+        "Доступны кнопки: Моя статистика, Написать админу, Информация.\n"
         "Кнопки «Выгрузка» и «Таблица» доступны спецпользователям."
     )
     await context.bot.send_message(chat_id=update.message.chat_id, text=text, reply_markup=reply_markup)
@@ -468,13 +476,16 @@ async def handle_photo_with_text(update: Update, context: ContextTypes.DEFAULT_T
 
 async def process_qr_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path: str, user_id: int) -> None:
     await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-    qr_text = decode_qr_code(file_path)
-    if not qr_text:
-        await context.bot.send_message(chat_id=update.message.chat_id, text="QR-код не найден.")
-        return
+    qr_text, number_text = extract_qr_and_number(file_path)
     spreadsheet = await get_spreadsheet_async()
-    await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [qr_text], context)
-    await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код {qr_text} сохранён.")
+    if qr_text:
+        await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [qr_text], context)
+        await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код {qr_text} сохранён.")
+    elif number_text:
+        await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [number_text], context)
+        await context.bot.send_message(chat_id=update.message.chat_id, text=f"Самокат {number_text} сохранён.")
+    else:
+        await context.bot.send_message(chat_id=update.message.chat_id, text="QR-код или номер не найден.")
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_user_allowed(update.message.from_user.id):
@@ -554,25 +565,25 @@ async def handle_contact_admin(update: Update, context: ContextTypes.DEFAULT_TYP
         text="Если возникли вопросы или нужна помощь, напишите админу:\n@Cyberdyne_Industries"
     )
 
-# ----------------- Unit-тесты для функций ------------------
-async def test_append_and_duplicate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
-    if user_id != ADMIN_USER_ID:
-        await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к тестам.")
-        return
-    await context.bot.send_message(chat_id=update.message.chat_id, text="Тест: запись и проверка дубликатов (A/B)...")
-    spreadsheet = await get_spreadsheet_async()
-    test_number = "00123456"
-    await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [test_number], context)
-    await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [test_number], context)
-    await context.bot.send_message(chat_id=update.message.chat_id, text="Тест завершён. Проверьте дублирование (см. A/B).")
-
-async def test_qr_decode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id != ADMIN_USER_ID:
-        await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к тестам.")
-        return
-    await context.bot.send_message(chat_id=update.message.chat_id, text="Отправьте фото для теста декодирования QR.")
+    # Кнопка доступна всем
+    media = []
+    captions = []
+    for path, desc in PHOTO_PATHS:
+        if os.path.exists(path):
+            media.append(path)
+            captions.append(desc)
+    if len(media) == 3:
+        with open(media[0], "rb") as p1, open(media[1], "rb") as p2, open(media[2], "rb") as p3:
+            await context.bot.send_photo(chat_id=update.message.chat_id, photo=p1, caption=captions[0], parse_mode="HTML")
+            await context.bot.send_photo(chat_id=update.message.chat_id, photo=p2, caption=captions[1], parse_mode="HTML")
+            await context.bot.send_photo(chat_id=update.message.chat_id, photo=p3, caption=captions[2], parse_mode="HTML")
+    else:
+        await context.bot.send_message(
+            chat_id=update.message.chat_id,
+            text="Информационные примеры не найдены. Обратитесь к администратору."
+        )
 
 # ----------------- MAIN ------------------
 async def main() -> None:
@@ -582,8 +593,6 @@ async def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("test_append", test_append_and_duplicate))
-    application.add_handler(CommandHandler("test_qr", test_qr_decode))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_SAVE_NOTES}$"), save_notes_handler))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_DELETE_NOTE}$"), delete_last_note))
     application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_with_text))
@@ -592,6 +601,7 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_RETURN}$"), handle_vozvrat))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_MY_STATS}$"), handle_my_stats))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_CONTACT_ADMIN}$"), handle_contact_admin))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_INFO}$"), handle_info))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     refresh_task = asyncio.create_task(background_refresh())
