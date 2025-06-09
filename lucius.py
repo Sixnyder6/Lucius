@@ -5,26 +5,17 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple
 import numpy as np
-import cupy as cp
 import cv2
 import pytesseract
 from pyzbar.pyzbar import decode
-import easyocr
-
-# ПРОВЕРКА CUDA ДОСТУПНОСТИ
-import torch
-print("torch.cuda.is_available:", torch.cuda.is_available())
-print("torch.cuda.device_count:", torch.cuda.device_count())
-
-print("cupy.cuda.runtime.getDeviceCount:", cp.cuda.runtime.getDeviceCount())
-
-# ========== ДАЛЬШЕ ПО КОДУ ==========
+from PIL import Image
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import nest_asyncio
+from openpyxl import Workbook, load_workbook
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -39,6 +30,7 @@ if creds_json:
         f.write(creds_json)
 else:
     GOOGLE_CREDENTIALS_PATH = r"C:\Users\pankr\PycharmProjects\lucius\credentials\scooteracomulator-1d3a66b4a345.json"
+
 os.environ["GOOGLE_CREDENTIALS_PATH"] = GOOGLE_CREDENTIALS_PATH
 
 GOOGLE_SHEET_URL: str = "https://docs.google.com/spreadsheets/d/1-xD9Yst0XiEmoSMzz1V6IGxzHTtOAJdkxykQLlwhk9Q/edit?usp=sharing"
@@ -50,7 +42,7 @@ ALLOWED_USERS: List[int] = [
     7388938513, 717164010
 ]
 SPECIAL_USER_IDS: Tuple[int, int] = (1181905320, 1955102736)
-ADMIN_USER_ID = 1181905320
+ADMIN_USER_ID = 1181905320  # Соболев Владислав
 
 BUTTON_VYGRUZKA: str = "📤 Выгрузка"
 BUTTON_RETURN: str = "🔙 Вернуться"
@@ -59,22 +51,12 @@ BUTTON_DELETE_NOTE: str = "❌ Удалить последнюю заметку"
 BUTTON_TABLE: str = "📊 Таблица"
 BUTTON_MY_STATS: str = "👤 Моя статистика"
 BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
-BUTTON_INFO: str = "ℹ️ Информация"
+BUTTON_MY_SHIFTS: str = "📅 Мой график"
 
 NOTES_DIR: Path = Path("notes")
 TEMP_DIR: Path = Path("temp")
-
-PHOTO_PATHS = [
-    (r"C:\Users\pankr\PycharmProjects\lucius\Photos\1 QR.jpg",
-     "🟢 <b>QR-код</b>\n\n"
-     "Пришли пример такого фото, чтобы добавить <b>уникальный номер самоката</b> — он автоматически попадёт в твою индивидуальную статистику!"),
-    (r"C:\Users\pankr\PycharmProjects\lucius\Photos\2 Nomer Zad.jpg",
-     "🟡 <b>Задний номер самоката</b>\n\n"
-     "Пришли пример такого фото, чтобы добавить <b>уникальный номер самоката</b>, если не доступен QR-код или лень его сканировать."),
-    (r"C:\Users\pankr\PycharmProjects\lucius\Photos\Nomer Text.jpg",
-     "🔴 <b>Текстовый номер</b>\n\n"
-     "Пришли пример такого фото, чтобы добавить <b>уникальный номер самоката</b>, если не доступны оба варианта выше (QR-код и задний номер).")
-]
+GRAFIK_PATH = Path("grafik.json")
+LAST_ACTIVITY_PATH = Path("last_activity.json")
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
@@ -87,16 +69,68 @@ nest_asyncio.apply()
 
 # -------------------- REGEX & VALIDATION --------------------
 NUMBER_PATTERN = re.compile(r'00\d{6}')
-
 def is_valid_number(text: str) -> Optional[str]:
     match = NUMBER_PATTERN.search(text)
     return match.group(0) if match else None
 
+SHIFT_SYMBOLS = {
+    "work": "🟢 Рабочий день",
+    "closed": "🟡 Закрыто",
+    "off": "🔴 Выходной"
+}
+
+def get_last_activity(user_id: int) -> str:
+    if LAST_ACTIVITY_PATH.exists():
+        with open(LAST_ACTIVITY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get(str(user_id), "")
+    return ""
+
+def update_last_activity(user_id: int):
+    today = datetime.now().strftime("%Y-%m-%d")
+    if LAST_ACTIVITY_PATH.exists():
+        with open(LAST_ACTIVITY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        data = {}
+    data[str(user_id)] = today
+    with open(LAST_ACTIVITY_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+def get_user_shift_message(user_id: int, days: int = 15) -> str:
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+    last_activity = get_last_activity(user_id)
+
+    try:
+        with open(GRAFIK_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return "График не найден или повреждён. Обратитесь к администратору."
+    user_id_str = str(user_id)
+    if user_id_str not in data:
+        return "Для вас график пока не назначен."
+    shifts = data[user_id_str].get("shifts", {})
+    lines = ["🎯 *Ваш персональный график смен*  \n"]
+    for i in range(days):
+        d = today + timedelta(days=i - 1)  # начинаем с вчерашнего дня
+        d_str = d.strftime("%Y-%m-%d")
+        d_view = d.strftime("%d %B")
+        # если это вчера и пользователь был активен именно вчера — показываем closed
+        if d == yesterday and last_activity == d_str:
+            shift_type = "closed"
+        else:
+            shift_type = shifts.get(d_str, "off")
+        symbol = SHIFT_SYMBOLS.get(shift_type, "❔ Без данных")
+        lines.append(f"📅 {d_view} → {symbol}")
+    lines.append("\n➖➖➖➖➖  \n✅ *Обновлено автоматически*  \n")
+    return "\n".join(lines)
+
 def get_user_reply_markup(user_id: int) -> Optional[ReplyKeyboardMarkup]:
     keyboard = [
+        [BUTTON_MY_SHIFTS],
         [BUTTON_MY_STATS],
-        [BUTTON_CONTACT_ADMIN],
-        [BUTTON_INFO]
+        [BUTTON_CONTACT_ADMIN]
     ]
     if user_id in SPECIAL_USER_IDS:
         keyboard.insert(0, [BUTTON_VYGRUZKA])
@@ -169,7 +203,8 @@ user_column_map: dict[str, Tuple[int, int]] = {
     "Зленко Александр": (25, 26),
     "Саранцев Игорь": (27, 28),
 }
-# -------------------- SHEETS API LIMITS & RETRIES --------------------
+
+# ------------ SHEETS API LIMITS & RETRIES -------------------
 async def append_to_google_sheets_async(spreadsheet: gspread.Spreadsheet, sheet_name: str, user_id: int, data: List[str], context=None) -> None:
     loop = asyncio.get_running_loop()
     max_attempts = 3
@@ -310,30 +345,9 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
         num_idx, date_idx = col_number - 1, date_col - 1
 
         today = datetime.now().strftime("%d.%m")
-        today_full = datetime.now().strftime("%d.%m. %Y")
-
         numbers_today = []
         all_numbers = []
         all_dates = []
-        by_date: Dict[str, int] = {}
-        first_date = None
-
-        # Для рейтинга и стрика
-        activity_by_user_per_day: Dict[str, Dict[str, int]] = {}
-        for uname, (cnum, cdate) in user_column_map.items():
-            nidx, didx = cnum - 1, cdate - 1
-            activity_by_user_per_day[uname] = {}
-            for row in all_data[1:]:
-                if len(row) > max(nidx, didx):
-                    num = row[nidx]
-                    dstr = row[didx]
-                    if num.strip() and dstr.strip():
-                        try:
-                            parsed = datetime.strptime(dstr.strip(), "%d.%m. %H:%M")
-                            dkey = parsed.strftime("%d.%m")
-                            activity_by_user_per_day[uname][dkey] = activity_by_user_per_day[uname].get(dkey, 0) + 1
-                        except Exception:
-                            continue
 
         for row in all_data[1:]:
             if len(row) > max(num_idx, date_idx):
@@ -344,12 +358,8 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
                     all_dates.append(date_str)
                     try:
                         parsed_date = datetime.strptime(date_str.strip(), "%d.%m. %H:%M")
-                        dkey = parsed_date.strftime("%d.%m")
-                        by_date[dkey] = by_date.get(dkey, 0) + 1
                         if parsed_date.strftime("%d.%m") == today:
                             numbers_today.append(number)
-                        if not first_date or parsed_date < first_date:
-                            first_date = parsed_date
                     except Exception:
                         continue
 
@@ -368,59 +378,6 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
 
         first_name = user_name.split()[1] if len(user_name.split()) > 1 else user_name
 
-<<<<<<< HEAD
-        total = len(all_numbers)
-        best_day = max(by_date.values(), default=0)
-        avg_per_day = round(total / len(by_date), 2) if by_date else total
-        streak = 0
-        days = sorted(by_date.keys(), key=lambda d: datetime.strptime(d, "%d.%m"), reverse=True)
-        today_dt = datetime.strptime(today, "%d.%m")
-        for i, d in enumerate(days):
-            day_dt = datetime.strptime(d, "%d.%m")
-            if i == 0:
-                if day_dt != today_dt or by_date[d] == 0:
-                    break
-            elif (today_dt - day_dt).days != streak:
-                break
-            streak += 1
-
-        if total >= 100:
-            rank = "🏆 Лидер"
-        elif total >= 50:
-            rank = "🚀 Активный участник"
-        elif total >= 10:
-            rank = "🔰 Новичок"
-        else:
-            rank = "👤 Пользователь"
-
-        today_counts = {uname: activity_by_user_per_day[uname].get(today, 0) for uname in user_column_map}
-        sorted_today = sorted(today_counts.items(), key=lambda x: x[1], reverse=True)
-        position = next((i + 1 for i, (uname, cnt) in enumerate(sorted_today) if uname == user_name), None)
-        total_participants = sum(1 for cnt in today_counts.values() if cnt > 0)
-        place_str = f"{position} место из {total_participants}" if position and today_counts[user_name] > 0 else "Нет активности сегодня"
-
-        if first_date:
-            first_date_str = first_date.strftime("%d.%m.%Y %H:%M")
-        else:
-            first_date_str = "нет данных"
-
-        text = (
-            f"👤 <b>Профиль пользователя</b>\n\n"
-            f"<b>Имя:</b> {first_name}\n"
-            f"<b>Ранг:</b> {rank}\n"
-            f"<b>Ваше место сегодня:</b> {place_str}\n\n"
-            f"📅 <b>Сегодня:</b>\n"
-            f" • Самокатов: <b>{len(numbers_today)}</b>\n"
-            f" • Дубликаты: <b>{today_duplicates}</b>\n"
-            f" • Последнее добавление: <b>{last_date}</b>\n\n"
-            f"📊 <b>Статистика за всё время:</b>\n"
-            f" • Всего добавлено: <b>{total}</b>\n"
-            f" • Лучший день: <b>{best_day}</b>\n"
-            f" • Среднее в день: <b>{avg_per_day}</b>\n"
-            f" • Дата первого добавления: <b>{first_date_str}</b>\n"
-            f"🔥 <b>Дней подряд с активностью:</b> {streak}\n\n"
-            f"🕑 <i>Статистика обновляется в реальном времени</i>"
-=======
         # --- Улучшенный вариант ---
         total_for_week = 0
         week_dates = []
@@ -488,7 +445,6 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
             f"— Самокатов добавлено: <b>{len(all_numbers)}</b>\n"
             f"— Первый добавленный самокат: <b>{first_added}</b>\n"
             f"🏆 <b>Ранг среди пользователей:</b> <b>{rank} место</b>\n"
->>>>>>> a719258e4274eb83a7e9e2e7f16f317eb9ef396b
         )
         return text
     return await loop.run_in_executor(None, _func)
@@ -502,47 +458,41 @@ async def background_refresh() -> None:
             logging.error(f"Error during background refresh: {e}")
             await asyncio.sleep(43200)
 
-# ------ EasyOCR integration (с CUDA/cupy) ------
-easyocr_reader = easyocr.Reader(['ru', 'en'], gpu=True)
+def rotate_image(image: np.ndarray, angle: float) -> np.ndarray:
+    (h, w) = image.shape[:2]
+    center = (w / 2, h / 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    rotated = cv2.warpAffine(image, M, (w, h))
+    return rotated
 
-def extract_number_easyocr(image_path: str) -> Optional[str]:
-    result = easyocr_reader.readtext(image_path, detail=0)
-    groups = []
-    for line in result:
-        m = re.search(r'(\d{4})', line)
-        if m:
-            groups.append(m.group(1))
-    if len(groups) >= 2:
-        return groups[0] + groups[1]
-    m8 = re.search(r'(\d{8})', ''.join(result))
-    if m8:
-        return m8.group(1)
+def decode_qr_code(image_path: str) -> Optional[str]:
+    logging.info("Called decode_qr_code")
+    image = cv2.imread(image_path)
+    if image is None:
+        logging.error("Failed to load image")
+        return None
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    for angle in [0, 90, 180, 270]:
+        rotated_image = rotate_image(gray, angle)
+        decoded_objects = decode(rotated_image)
+        for obj in decoded_objects:
+            qr_text = obj.data.decode("utf-8")
+            match = re.search(r'\d{8}', qr_text)
+            if match:
+                number = match.group(0)
+                logging.info(f"Extracted number: {number} at angle {angle}")
+                return number
+
+    logging.error("No QR code found at any angle, trying OCR")
+    ocr_result = pytesseract.image_to_string(gray)
+    match = re.search(r'\d{8}', ocr_result)
+    if match:
+        number = match.group(0)
+        logging.info(f"Extracted number via OCR: {number}")
+        return number
     return None
 
-def extract_qr_and_number(image_path: str) -> tuple[Optional[str], Optional[str]]:
-    image_np = cv2.imread(image_path)
-    try:
-        image_cp = cp.asarray(image_np)
-        gray_cp = cp.mean(image_cp, axis=2).astype(cp.uint8)
-        gray = cp.asnumpy(gray_cp)
-    except Exception as e:
-        logging.warning(f"Не удалось использовать cupy для обработки изображения: {e}")
-        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
-
-    qr_data = None
-    decoded = decode(image_np)
-    if decoded:
-        qr_data = decoded[0].data.decode("utf-8")
-        qr_data = re.sub(r"\D", "", qr_data)
-
-    number = extract_number_easyocr(image_path)
-    if not number:
-        ocr_result = pytesseract.image_to_string(gray, config="--psm 6 digits")
-        numbers = re.findall(r"\d{4}\s*\d{4}", ocr_result.replace('\n', ''))
-        if numbers:
-            number = numbers[0].replace(" ", "")
-
-    return qr_data, number
 # ------------- HANDLERS -------------
 
 async def save_notes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -597,7 +547,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/help — помощь\n"
         "/save_notes — сохранить заметку\n"
         "/delete_last_note — удалить последнюю заметку\n"
-        "Доступны кнопки: Моя статистика, Написать админу, Информация.\n"
+        "Доступны кнопки: Моя статистика, Мой график, Написать админу.\n"
         "Кнопки «Выгрузка» и «Таблица» доступны спецпользователям."
     )
     await context.bot.send_message(chat_id=update.message.chat_id, text=text, reply_markup=reply_markup)
@@ -630,16 +580,14 @@ async def handle_photo_with_text(update: Update, context: ContextTypes.DEFAULT_T
 
 async def process_qr_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, file_path: str, user_id: int) -> None:
     await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
-    qr_text, number_text = extract_qr_and_number(file_path)
+    qr_text = decode_qr_code(file_path)
+    if not qr_text:
+        await context.bot.send_message(chat_id=update.message.chat_id, text="QR-код не найден.")
+        return
     spreadsheet = await get_spreadsheet_async()
-    if qr_text:
-        await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [qr_text], context)
-        await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код {qr_text} сохранён.")
-    elif number_text:
-        await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [number_text], context)
-        await context.bot.send_message(chat_id=update.message.chat_id, text=f"Самокат {number_text} сохранён.")
-    else:
-        await context.bot.send_message(chat_id=update.message.chat_id, text="QR-код или номер не найден.")
+    await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [qr_text], context)
+    update_last_activity(user_id)
+    await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код {qr_text} сохранён.")
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_user_allowed(update.message.from_user.id):
@@ -651,6 +599,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if number:
         spreadsheet = await get_spreadsheet_async()
         await append_to_google_sheets_async(spreadsheet, "QR Codes", update.message.from_user.id, [number], context)
+        update_last_activity(update.message.from_user.id)
         await context.bot.send_message(chat_id=update.message.chat_id, text=f"Самокат {number} сохранён.")
     else:
         await context.bot.send_message(chat_id=update.message.chat_id, text="Самокат не найден.")
@@ -708,6 +657,15 @@ async def handle_my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     stats = await get_personal_stats(spreadsheet, user_id)
     await context.bot.send_message(chat_id=update.message.chat_id, text=stats, parse_mode="HTML")
 
+async def handle_my_shifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+    message = get_user_shift_message(user_id, days=15)
+    await context.bot.send_message(
+        chat_id=update.message.chat_id,
+        text=message,
+        parse_mode="Markdown"
+    )
+
 async def handle_contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
     if not is_user_allowed(user_id):
@@ -719,24 +677,25 @@ async def handle_contact_admin(update: Update, context: ContextTypes.DEFAULT_TYP
         text="Если возникли вопросы или нужна помощь, напишите админу:\n@Cyberdyne_Industries"
     )
 
-async def handle_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# ----------------- Unit-тесты для функций ------------------
+async def test_append_and_duplicate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    media = []
-    captions = []
-    for path, desc in PHOTO_PATHS:
-        if os.path.exists(path):
-            media.append(path)
-            captions.append(desc)
-    if len(media) == 3:
-        with open(media[0], "rb") as p1, open(media[1], "rb") as p2, open(media[2], "rb") as p3:
-            await context.bot.send_photo(chat_id=update.message.chat_id, photo=p1, caption=captions[0], parse_mode="HTML")
-            await context.bot.send_photo(chat_id=update.message.chat_id, photo=p2, caption=captions[1], parse_mode="HTML")
-            await context.bot.send_photo(chat_id=update.message.chat_id, photo=p3, caption=captions[2], parse_mode="HTML")
-    else:
-        await context.bot.send_message(
-            chat_id=update.message.chat_id,
-            text="Информационные примеры не найдены. Обратитесь к администратору."
-        )
+    if user_id != ADMIN_USER_ID:
+        await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к тестам.")
+        return
+    await context.bot.send_message(chat_id=update.message.chat_id, text="Тест: запись и проверка дубликатов (A/B)...")
+    spreadsheet = await get_spreadsheet_async()
+    test_number = "00123456"
+    await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [test_number], context)
+    await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [test_number], context)
+    await context.bot.send_message(chat_id=update.message.chat_id, text="Тест завершён. Проверьте дублирование (см. A/B).")
+
+async def test_qr_decode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id != ADMIN_USER_ID:
+        await context.bot.send_message(chat_id=update.message.chat_id, text="Нет доступа к тестам.")
+        return
+    await context.bot.send_message(chat_id=update.message.chat_id, text="Отправьте фото для теста декодирования QR.")
 
 # ----------------- MAIN ------------------
 async def main() -> None:
@@ -746,6 +705,8 @@ async def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("test_append", test_append_and_duplicate))
+    application.add_handler(CommandHandler("test_qr", test_qr_decode))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_SAVE_NOTES}$"), save_notes_handler))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_DELETE_NOTE}$"), delete_last_note))
     application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_with_text))
@@ -753,8 +714,8 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_TABLE}$"), handle_table))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_RETURN}$"), handle_vozvrat))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_MY_STATS}$"), handle_my_stats))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_MY_SHIFTS}$"), handle_my_shifts))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_CONTACT_ADMIN}$"), handle_contact_admin))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(f"^{BUTTON_INFO}$"), handle_info))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     refresh_task = asyncio.create_task(background_refresh())

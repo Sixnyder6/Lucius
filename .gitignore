@@ -13,3 +13,4 @@ venv/
 # Credentials, secrets
 credentials/
 temp/
+last_activity.json
