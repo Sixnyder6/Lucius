@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional, List, Tuple
 import numpy as np
@@ -18,6 +19,12 @@ import nest_asyncio
 from openpyxl import Workbook, load_workbook
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+
+# ---------------------- TIMEZONE SETUP ----------------------
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+def now_moscow():
+    return datetime.now(MOSCOW_TZ)
+# -----------------------------------------------------------
 
 # ---------------------- CONFIGURATION ----------------------
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "тут_твой_токен")
@@ -53,7 +60,6 @@ BUTTON_SAVE_NOTES: str = "💾 Сохранить заметку"
 BUTTON_DELETE_NOTE: str = "❌ Удалить последнюю заметку"
 BUTTON_TABLE: str = "📊 Таблица"
 BUTTON_MY_STATS: str = "👤 Моя статистика"
-BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
 BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
 BUTTON_MY_SHIFTS: str = "📅 Мой график"
 
@@ -91,7 +97,7 @@ def get_last_activity(user_id: int) -> str:
     return ""
 
 def update_last_activity(user_id: int):
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_moscow().strftime("%Y-%m-%d")
     if LAST_ACTIVITY_PATH.exists():
         with open(LAST_ACTIVITY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -102,7 +108,7 @@ def update_last_activity(user_id: int):
         json.dump(data, f)
 
 def get_user_shift_message(user_id: int, days: int = 15) -> str:
-    today = datetime.now().date()
+    today = now_moscow().date()
     yesterday = today - timedelta(days=1)
     last_activity = get_last_activity(user_id)
 
@@ -229,7 +235,7 @@ async def append_to_google_sheets_async(spreadsheet: gspread.Spreadsheet, sheet_
 
                 number_column, datetime_column = user_columns
                 next_row: int = max(len(sheet.col_values(number_column)) + 1, 2)
-                current_datetime: str = datetime.now().strftime("%d.%m. %H:%M")
+                current_datetime: str = now_moscow().strftime("%d.%m. %H:%M")
                 existing_numbers: List[str] = sheet.col_values(number_column)[1:]
                 if data[0] in existing_numbers:
                     duplicate_row: int = existing_numbers.index(data[0]) + 2
@@ -295,7 +301,7 @@ async def analyze_google_sheet_data_optimized_async(spreadsheet: gspread.Spreads
         data_rows = all_data[1:]
         summary_lines: List[str] = []
         overall_total, overall_duplicates = 0, 0
-        current_date: str = datetime.now().strftime("%d.%m")
+        current_date: str = now_moscow().strftime("%d.%m")
 
         active_users = []
         for user_name, (col_number, date_col) in user_column_map.items():
@@ -348,7 +354,7 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
         col_number, date_col = user_column_map[user_name]
         num_idx, date_idx = col_number - 1, date_col - 1
 
-        today = datetime.now().strftime("%d.%m")
+        today = now_moscow().strftime("%d.%m")
         numbers_today = []
         all_numbers = []
         all_dates = []
@@ -386,7 +392,7 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
         total_for_week = 0
         week_dates = []
         week_numbers = []
-        now = datetime.now()
+        now = now_moscow()
         for row in all_data[1:]:
             if len(row) > max(num_idx, date_idx):
                 number = row[num_idx]
