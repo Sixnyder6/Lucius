@@ -368,6 +368,7 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
 
         first_name = user_name.split()[1] if len(user_name.split()) > 1 else user_name
 
+<<<<<<< HEAD
         total = len(all_numbers)
         best_day = max(by_date.values(), default=0)
         avg_per_day = round(total / len(by_date), 2) if by_date else total
@@ -419,6 +420,75 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
             f" • Дата первого добавления: <b>{first_date_str}</b>\n"
             f"🔥 <b>Дней подряд с активностью:</b> {streak}\n\n"
             f"🕑 <i>Статистика обновляется в реальном времени</i>"
+=======
+        # --- Улучшенный вариант ---
+        total_for_week = 0
+        week_dates = []
+        week_numbers = []
+        now = datetime.now()
+        for row in all_data[1:]:
+            if len(row) > max(num_idx, date_idx):
+                number = row[num_idx]
+                date_str = row[date_idx]
+                if number.strip() and date_str.strip():
+                    try:
+                        dt = datetime.strptime(date_str.strip(), "%d.%m. %H:%M")
+                        if (now - dt).days < 7:
+                            week_numbers.append(number)
+                            week_dates.append(dt)
+                    except Exception:
+                        continue
+        total_for_week = len(week_numbers)
+
+        # Топ день недели
+        day_counts = {}
+        for dt in week_dates:
+            day_str = dt.strftime("%d.%m")
+            day_counts[day_str] = day_counts.get(day_str, 0) + 1
+        top_day = max(day_counts.items(), key=lambda x: x[1], default=(None, 0))
+
+        # Среднее в день
+        unique_days = len(set(dt.strftime("%d.%m") for dt in week_dates))
+        avg_per_day = round(total_for_week / unique_days, 2) if unique_days else total_for_week
+
+        # Первый добавленный
+        first_added = (
+            min([d for d in all_dates if d.strip()], default="нет данных")
+            if all_dates and any(all_dates)
+            else "нет данных"
+        )
+
+        # Ранг пользователя
+        user_totals = []
+        for uname, (col, datec) in user_column_map.items():
+            idx = col - 1
+            numbers = []
+            for row in all_data[1:]:
+                if len(row) > idx:
+                    n = row[idx]
+                    if n.strip():
+                        numbers.append(n)
+            user_totals.append((uname, len(numbers)))
+        user_totals.sort(key=lambda x: -x[1])
+        rank = next((i + 1 for i, v in enumerate(user_totals) if v[0] == user_name), None)
+
+        # Формируем расширенное сообщение
+        text = (
+            f"👤 <b>Ваша статистика</b>\n\n"
+            f"<b>Имя:</b> {first_name}\n\n"
+            f"📅 <b>Сегодня:</b>\n"
+            f"— Добавлено самокатов: <b>{len(numbers_today)}</b>\n"
+            f"— Дубликатов: <b>{today_duplicates}</b>\n"
+            f"— Последнее добавление: <b>{last_date}</b>\n\n"
+            f"📈 <b>Неделя:</b>\n"
+            f"— Самокатов добавлено: <b>{total_for_week}</b>\n"
+            f"— Лучший день недели: <b>{top_day[0]} — {top_day[1]} шт.</b>\n"
+            f"— Среднее в день: <b>{avg_per_day}</b>\n\n"
+            f"📊 <b>Всего:</b>\n"
+            f"— Самокатов добавлено: <b>{len(all_numbers)}</b>\n"
+            f"— Первый добавленный самокат: <b>{first_added}</b>\n"
+            f"🏆 <b>Ранг среди пользователей:</b> <b>{rank} место</b>\n"
+>>>>>>> a719258e4274eb83a7e9e2e7f16f317eb9ef396b
         )
         return text
     return await loop.run_in_executor(None, _func)
