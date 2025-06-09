@@ -3,7 +3,7 @@ import re
 import json
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Tuple
 import numpy as np
@@ -54,18 +54,13 @@ BUTTON_DELETE_NOTE: str = "❌ Удалить последнюю заметку"
 BUTTON_TABLE: str = "📊 Таблица"
 BUTTON_MY_STATS: str = "👤 Моя статистика"
 BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
-<<<<<<< HEAD
+BUTTON_CONTACT_ADMIN: str = "📩 Написать админу"
 BUTTON_MY_SHIFTS: str = "📅 Мой график"
 
 NOTES_DIR: Path = Path("notes")
 TEMP_DIR: Path = Path("temp")
 GRAFIK_PATH = Path("grafik.json")
 LAST_ACTIVITY_PATH = Path("last_activity.json")
-=======
-
-NOTES_DIR: Path = Path("notes")
-TEMP_DIR: Path = Path("temp")
->>>>>>> c33e8d3489791c078ceac5db216c9c7b4fd47b24
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
@@ -137,8 +132,8 @@ def get_user_shift_message(user_id: int, days: int = 15) -> str:
 
 def get_user_reply_markup(user_id: int) -> Optional[ReplyKeyboardMarkup]:
     keyboard = [
-        [BUTTON_MY_SHIFTS],
         [BUTTON_MY_STATS],
+        [BUTTON_MY_SHIFTS],
         [BUTTON_CONTACT_ADMIN]
     ]
     if user_id in SPECIAL_USER_IDS:
@@ -556,11 +551,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/help — помощь\n"
         "/save_notes — сохранить заметку\n"
         "/delete_last_note — удалить последнюю заметку\n"
-<<<<<<< HEAD
+
         "Доступны кнопки: Моя статистика, Мой график, Написать админу.\n"
-=======
+
         "Доступны кнопки: Моя статистика, Написать админу.\n"
->>>>>>> c33e8d3489791c078ceac5db216c9c7b4fd47b24
+
         "Кнопки «Выгрузка» и «Таблица» доступны спецпользователям."
     )
     await context.bot.send_message(chat_id=update.message.chat_id, text=text, reply_markup=reply_markup)
@@ -599,10 +594,7 @@ async def process_qr_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, f
         return
     spreadsheet = await get_spreadsheet_async()
     await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [qr_text], context)
-<<<<<<< HEAD
-    update_last_activity(user_id)
-=======
->>>>>>> c33e8d3489791c078ceac5db216c9c7b4fd47b24
+
     await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код {qr_text} сохранён.")
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
