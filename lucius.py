@@ -11,12 +11,10 @@ import numpy as np
 import cv2
 import pytesseract
 from pyzbar.pyzbar import decode
-from PIL import Image
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import nest_asyncio
-from openpyxl import Workbook, load_workbook
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -439,22 +437,23 @@ async def get_personal_stats(spreadsheet: gspread.Spreadsheet, user_id: int) -> 
         user_totals.sort(key=lambda x: -x[1])
         rank = next((i + 1 for i, v in enumerate(user_totals) if v[0] == user_name), None)
 
-        # Формируем расширенное сообщение
+        # --- Новый красивый формат ---
         text = (
-            f"👤 <b>Ваша статистика</b>\n\n"
-            f"<b>Имя:</b> {first_name}\n\n"
-            f"📅 <b>Сегодня:</b>\n"
-            f"— Добавлено самокатов: <b>{len(numbers_today)}</b>\n"
-            f"— Дубликатов: <b>{today_duplicates}</b>\n"
-            f"— Последнее добавление: <b>{last_date}</b>\n\n"
-            f"📈 <b>Неделя:</b>\n"
-            f"— Самокатов добавлено: <b>{total_for_week}</b>\n"
-            f"— Лучший день недели: <b>{top_day[0]} — {top_day[1]} шт.</b>\n"
-            f"— Среднее в день: <b>{avg_per_day}</b>\n\n"
-            f"📊 <b>Всего:</b>\n"
-            f"— Самокатов добавлено: <b>{len(all_numbers)}</b>\n"
-            f"— Первый добавленный самокат: <b>{first_added}</b>\n"
-            f"🏆 <b>Ранг среди пользователей:</b> <b>{rank} место</b>\n"
+            f"👤 *Ваша статистика*  \n"
+            f"🟢 *В сети*  \n\n"
+            f"*Имя:* {first_name}  \n\n"
+            f"📅 *Сегодня:*  \n"
+            f"— 🛴 Добавлено самокатов: *{len(numbers_today)}*  \n"
+            f"— 🔄 Дубликатов: *{today_duplicates}*  \n"
+            f"— ⏳ Последнее добавление: *{last_date}*  \n\n"
+            f"📈 *Неделя:*  \n"
+            f"— 📦 Самокатов добавлено: *{total_for_week}*  \n"
+            f"— 🌟 Лучший день недели: *{top_day[0]} — {top_day[1]} шт.*  \n"
+            f"— 🔢 Среднее в день: *{avg_per_day}*  \n\n"
+            f"📊 *Всего:*  \n"
+            f"— 🚀 Самокатов добавлено: *{len(all_numbers)}*  \n"
+            f"— 🕒 Первый добавленный самокат: *{first_added}*  \n"
+            f"🏆 Ранг среди пользователей: *{rank} место*"
         )
         return text
     return await loop.run_in_executor(None, _func)
@@ -475,6 +474,40 @@ def rotate_image(image: np.ndarray, angle: float) -> np.ndarray:
     rotated = cv2.warpAffine(image, M, (w, h))
     return rotated
 
+def extract_number_from_yellow(image_path: str) -> Optional[str]:
+    import cv2
+    import numpy as np
+    import pytesseract
+    import re
+
+    image = cv2.imread(image_path)
+    if image is None:
+        return None
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower_yellow = np.array([15, 80, 120])
+    upper_yellow = np.array([40, 255, 255])
+    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    yellow = cv2.bitwise_and(image, image, mask=mask)
+    gray = cv2.cvtColor(yellow, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    count_black = np.sum(thresh == 0)
+    count_white = np.sum(thresh == 255)
+    if count_black < count_white:
+        thresh = 255 - thresh
+
+    h = thresh.shape[0]
+    crop = thresh[int(h*0.6):, :]
+
+    custom_config = '--psm 7 -c tessedit_char_whitelist=0123456789'
+    ocr_result = pytesseract.image_to_string(crop, config=custom_config)
+
+    match = re.search(r'\d{8}', ocr_result)
+    if match:
+        return match.group(0)
+    return None
+
 def decode_qr_code(image_path: str) -> Optional[str]:
     logging.info("Called decode_qr_code")
     image = cv2.imread(image_path)
@@ -494,13 +527,11 @@ def decode_qr_code(image_path: str) -> Optional[str]:
                 logging.info(f"Extracted number: {number} at angle {angle}")
                 return number
 
-    logging.error("No QR code found at any angle, trying OCR")
-    ocr_result = pytesseract.image_to_string(gray)
-    match = re.search(r'\d{8}', ocr_result)
-    if match:
-        number = match.group(0)
-        logging.info(f"Extracted number via OCR: {number}")
+    number = extract_number_from_yellow(image_path)
+    if number:
+        logging.info(f"Extracted number via improved OCR: {number}")
         return number
+
     return None
 
 # ------------- HANDLERS -------------
@@ -596,12 +627,12 @@ async def process_qr_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, f
     await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
     qr_text = decode_qr_code(file_path)
     if not qr_text:
-        await context.bot.send_message(chat_id=update.message.chat_id, text="QR-код не найден.")
+        await context.bot.send_message(chat_id=update.message.chat_id, text="QR-код и номер под ним не распознаны.")
         return
     spreadsheet = await get_spreadsheet_async()
     await append_to_google_sheets_async(spreadsheet, "QR Codes", user_id, [qr_text], context)
 
-    await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код {qr_text} сохранён.")
+    await context.bot.send_message(chat_id=update.message.chat_id, text=f"QR-код или номер {qr_text} сохранён.")
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_user_allowed(update.message.from_user.id):
@@ -669,7 +700,13 @@ async def handle_my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.TYPING)
     spreadsheet = await get_spreadsheet_async()
     stats = await get_personal_stats(spreadsheet, user_id)
-    await context.bot.send_message(chat_id=update.message.chat_id, text=stats, parse_mode="HTML")
+    reply_markup = ReplyKeyboardMarkup([[BUTTON_RETURN]], resize_keyboard=True)
+    await context.bot.send_message(
+        chat_id=update.message.chat_id,
+        text=stats,
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
 
 async def handle_my_shifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
